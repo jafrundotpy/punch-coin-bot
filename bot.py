@@ -16,6 +16,8 @@ TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 SUBSCRIBERS_FILE = "subscribers.json"
 
 
+# ---------------- FILE HANDLING ----------------
+
 def load_subscribers():
     if os.path.exists(SUBSCRIBERS_FILE):
         try:
@@ -30,6 +32,8 @@ def save_subscribers(subs):
     with open(SUBSCRIBERS_FILE, "w") as f:
         json.dump(list(subs), f)
 
+
+# ---------------- API ----------------
 
 def fetch_prices():
     try:
@@ -54,7 +58,8 @@ def build_message(data):
     return (
         f"📊 <b>Market Update</b> ({now})\n\n"
         f"◎ SOL: {fmt(sol.get('usd', 0))} {arrow(sol.get('usd_24h_change', 0))} {sol.get('usd_24h_change', 0):.2f}%\n"
-        f"🥊 PUNCH: {fmt(punch.get('usd', 0))} {arrow(punch.get('usd_24h_change', 0))} {punch.get('usd_24h_change', 0):.2f}%"
+        f"🥊 PUNCH: {fmt(punch.get('usd', 0))} {arrow(punch.get('usd_24h_change', 0))} {punch.get('usd_24h_change', 0):.2f}%\n\n"
+        f"/stop to unsubscribe"
     )
 
 
@@ -86,7 +91,7 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Error fetching price.")
 
 
-# ---------------- LOOP (REPLACES job_queue) ----------------
+# ---------------- BACKGROUND LOOP ----------------
 
 async def broadcast_loop(app):
     await asyncio.sleep(5)
@@ -123,12 +128,14 @@ async def main():
     app.add_handler(CommandHandler("stop", stop))
     app.add_handler(CommandHandler("price", price))
 
-    # start background loop
+    # Start background loop
     asyncio.create_task(broadcast_loop(app))
 
     print("Bot running...")
     await app.run_polling()
 
+
+# ---------------- START ----------------
 
 if __name__ == "__main__":
     import asyncio
