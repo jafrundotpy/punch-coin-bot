@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import requests
+import asyncio
 from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -10,139 +11,125 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
-logger = logging.getLogger(__name__)
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 SUBSCRIBERS_FILE = "subscribers.json"
 
 
-def load_subscribers() -> set:
+def load_subscribers():
     if os.path.exists(SUBSCRIBERS_FILE):
         try:
             with open(SUBSCRIBERS_FILE, "r") as f:
                 return set(json.load(f))
-        except Exception:
+        except:
             return set()
     return set()
 
 
-def save_subscribers(subscribers: set):
+def save_subscribers(subs):
     with open(SUBSCRIBERS_FILE, "w") as f:
-        json.dump(list(subscribers), f)
+        json.dump(list(subs), f)
 
 
-def fetch_prices() -> dict | None:
-    url = (
-        "https://api.coingecko.com/api/v3/simple/price"
-        "?ids=solana,punch-2&vs_currencies=usd&include_24hr_change=true"
-    )
+def fetch_prices():
     try:
-        resp = requests.get(url, timeout=10)
-        resp.raise_for_status()
-        return resp.json()
-    except Exception as e:
-        logger.error(f"Price fetch failed: {e}")
+        url = "https://api.coingecko.com/api/v3/simple/price?ids=solana,punch-2&vs_currencies=usd&include_24hr_change=true"
+        return requests.get(url, timeout=10).json()
+    except:
         return None
 
 
-def format_price(price: float) -> str:
-    if price >= 1:
-        return f"${round(price):,}"
-    else:
-        units = round(price * 1_000_000)
-        return f"{units:,} M"
+def build_message(data):
+    now = datetime.utcnow().strftime("%H:%M UTC")
 
+    sol = data.get("solana", {})
+    punch = data.get("punch-2", {})
 
-def build_message(data: dict) -> str:
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-    sol_price = data.get("solana", {}).get("usd", 0)
-    sol_change = data.get("solana", {}).get("usd_24h_change") or 0.0
-    punch_price = data.get("punch-2", {}).get("usd", 0)
-    punch_change = data.get("punch-2", {}).get("usd_24h_change") or 0.0
+    def fmt(price):
+        return f"${price:.4f}" if price < 1 else f"${price:,.2f}"
 
-    def arrow(c): return "▲" if c >= 0 else "▼"
-    def sign(c): return "+" if c >= 0 else ""
+    def arrow(c):
+        return "▲" if c >= 0 else "▼"
 
-    lines = [
-        f"<b>SOL / PUNCH</b>  •  {now}\n",
-        f"◎ <b>SOL</b>    {format_price(sol_price)}  {arrow(sol_change)} {sign(sol_change)}{sol_change:.2f}%",
-        f"🥊 <b>PUNCH</b>  {format_price(punch_price)}  {arrow(punch_change)} {sign(punch_change)}{punch_change:.2f}%",
-        "\n/stop to unsubscribe",
-    ]
-    return "\n".join(lines)
-
-
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    subs = load_subscribers()
-    if chat_id in subs:
-        await update.message.reply_text(
-            "Already subscribed! Use /price for instant update or /stop to unsubscribe."
-        )
-        return
-    subs.add(chat_id)
-    save_subscribers(subs)
-    await update.message.reply_text(
-        "Subscribed! You will get <b>SOL</b> and <b>PUNCH</b> price updates every <b>60 seconds</b>.\n\n"
-        "/price — instant update\n"
-        "/stop — unsubscribe",
-        parse_mode="HTML",
+    return (
+        f"📊 <b>Market Update</b> ({now})\n\n"
+        f"◎ SOL: {fmt(sol.get('usd', 0))} {arrow(sol.get('usd_24h_change', 0))} {sol.get('usd_24h_change', 0):.2f}%\n"
+        f"🥊 PUNCH: {fmt(punch.get('usd', 0))} {arrow(punch.get('usd_24h_change', 0))} {punch.get('usd_24h_change', 0):.2f}%"
     )
 
 
-async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
+# ---------------- COMMANDS ----------------
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     subs = load_subscribers()
-    if chat_id not in subs:
-        await update.message.reply_text("Not subscribed. Use /start to subscribe.")
-        return
-    subs.discard(chat_id)
+    subs.add(update.effective_chat.id)
     save_subscribers(subs)
-    await update.message.reply_text("Unsubscribed. Use /start anytime to resubscribe.")
+
+    await update.message.reply_text(
+        "✅ Subscribed!\n\nYou’ll get updates every 60 seconds.\n\n/price → instant\n/stop → unsubscribe"
+    )
 
 
-async def cmd_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    subs = load_subscribers()
+    subs.discard(update.effective_chat.id)
+    save_subscribers(subs)
+
+    await update.message.reply_text("❌ Unsubscribed.")
+
+
+async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = fetch_prices()
     if data:
         await update.message.reply_text(build_message(data), parse_mode="HTML")
     else:
-        await update.message.reply_text("Could not fetch prices right now. Try again shortly.")
+        await update.message.reply_text("Error fetching price.")
 
 
-async def broadcast(context: ContextTypes.DEFAULT_TYPE):
-    subs = load_subscribers()
-    if not subs:
-        return
-    data = fetch_prices()
-    if not data:
-        return
-    msg = build_message(data)
-    dead = set()
-    for chat_id in subs:
+# ---------------- LOOP (REPLACES job_queue) ----------------
+
+async def broadcast_loop(app):
+    await asyncio.sleep(5)
+
+    while True:
         try:
-            await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML")
+            subs = load_subscribers()
+            data = fetch_prices()
+
+            if data and subs:
+                msg = build_message(data)
+
+                for chat_id in subs:
+                    try:
+                        await app.bot.send_message(chat_id, msg, parse_mode="HTML")
+                    except:
+                        pass
+
         except Exception as e:
-            logger.warning(f"Failed to message {chat_id}: {e}")
-            dead.add(chat_id)
-    if dead:
-        subs -= dead
-        save_subscribers(subs)
+            print("Loop error:", e)
+
+        await asyncio.sleep(60)
 
 
-def main():
+# ---------------- MAIN ----------------
+
+async def main():
     if not TOKEN:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
+        raise RuntimeError("TELEGRAM_BOT_TOKEN not set")
 
     app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("stop", cmd_stop))
-    app.add_handler(CommandHandler("price", cmd_price))
 
-    app.job_queue.run_repeating(broadcast, interval=60, first=5)
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("stop", stop))
+    app.add_handler(CommandHandler("price", price))
 
-    logger.info("Bot running...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    # start background loop
+    asyncio.create_task(broadcast_loop(app))
+
+    print("Bot running...")
+    await app.run_polling()
 
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())
