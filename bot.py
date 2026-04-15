@@ -118,7 +118,7 @@ async def broadcast_loop(app):
 
 # ---------- MAIN ----------
 
-async def main():
+def main():
     if not TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN not set")
 
@@ -128,18 +128,17 @@ async def main():
     app.add_handler(CommandHandler("stop", stop))
     app.add_handler(CommandHandler("price", price))
 
-    # start background loop
-    asyncio.create_task(broadcast_loop(app))
+    # Start background loop safely
+    async def post_init(app):
+        asyncio.create_task(broadcast_loop(app))
+
+    app.post_init = post_init
 
     print("Bot running...")
-    await app.run_polling()
+    app.run_polling()
 
 
-# ---------- start -----------
+# ---------- START ----------
 
 if __name__ == "__main__":
-    import asyncio
-
-    loop = asyncio.get_event_loop()
-    loop.create_task(main())
-    loop.run_forever()
+    main()
