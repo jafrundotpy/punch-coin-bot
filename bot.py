@@ -16,7 +16,7 @@ TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 SUBSCRIBERS_FILE = "subscribers.json"
 
 
-# ---------------- FILE HANDLING ----------------
+# ---------- FILE HANDLING ----------
 
 def load_subscribers():
     if os.path.exists(SUBSCRIBERS_FILE):
@@ -33,7 +33,7 @@ def save_subscribers(subs):
         json.dump(list(subs), f)
 
 
-# ---------------- API ----------------
+# ---------- API ----------
 
 def fetch_prices():
     try:
@@ -63,7 +63,7 @@ def build_message(data):
     )
 
 
-# ---------------- COMMANDS ----------------
+# ---------- COMMANDS ----------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     subs = load_subscribers()
@@ -71,7 +71,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_subscribers(subs)
 
     await update.message.reply_text(
-        "✅ Subscribed!\n\nYou’ll get updates every 60 seconds.\n\n/price → instant\n/stop → unsubscribe"
+        "✅ Subscribed!\n\nUpdates every 60 seconds.\n\n/price → instant\n/stop → unsubscribe"
     )
 
 
@@ -91,7 +91,7 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Error fetching price.")
 
 
-# ---------------- BACKGROUND LOOP ----------------
+# ---------- BACKGROUND LOOP ----------
 
 async def broadcast_loop(app):
     await asyncio.sleep(5)
@@ -116,7 +116,7 @@ async def broadcast_loop(app):
         await asyncio.sleep(60)
 
 
-# ---------------- MAIN ----------------
+# ---------- MAIN ----------
 
 async def main():
     if not TOKEN:
@@ -128,21 +128,14 @@ async def main():
     app.add_handler(CommandHandler("stop", stop))
     app.add_handler(CommandHandler("price", price))
 
-    # Start background loop
+    # start background loop
     asyncio.create_task(broadcast_loop(app))
 
     print("Bot running...")
     await app.run_polling()
 
 
-# ---------------- START ----------------
+# ---------- START ----------
 
 if __name__ == "__main__":
-    import asyncio
-
-    try:
-        asyncio.get_event_loop().run_until_complete(main())
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(main())
+    asyncio.run(main())
